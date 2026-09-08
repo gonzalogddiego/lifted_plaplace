@@ -67,7 +67,6 @@ def solve_problem(method, mesh, p, f_rhs, boundary_value, args):
         max_iter=args.max_iter,
         max_iter_ls=args.max_iter_ls,
         quad_degree=args.quad_degree,
-        lhs_only_regularization=args.lhs_only_regularization,
     )
     success, data = solver.solve(return_data=True)
     return solver, success, data
@@ -191,11 +190,6 @@ def parse_args():
     parser.add_argument("--max-iter-ls", type=positive_int, default=20)
     parser.add_argument("--quad-degree", type=positive_int, default=5)
     parser.add_argument("--projection-mode", choices=("lhs", "state"), default="lhs")
-    parser.add_argument(
-        "--lhs-only-regularization",
-        action="store_true",
-        help="use delta-min only on the left-hand side",
-    )
     parser.add_argument(
         "--suffix",
         default="",
