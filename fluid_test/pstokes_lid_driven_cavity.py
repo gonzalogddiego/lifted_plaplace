@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import inspect
 from firedrake import *
 import finat
@@ -54,7 +54,7 @@ class PStokesBase(NewtonMethod):
             self.nullspace = MixedVectorSpaceBasis(self.Z, [self.Z.sub(0), VectorSpaceBasis(constant=True)])
 
     def apply_bcs(self):
-        print("Applying boundary conditions to the current state")
+        print("\tApplying boundary conditions to the current state")
         for bc_i in (self.bc if isinstance(self.bc, list) else [self.bc]):
             bc_i.apply(self.z)
 
@@ -209,11 +209,8 @@ if __name__ == "__main__":
 
     print("Final velocity norm = %.3e" % norm(solver.z.sub(0)))
     print("Max velocity        = %.3e" % solver.z.sub(0).dat.data[:,0].max())
-
-    try:
-        print("Difference = %.3e" % norm(solver.z.sub(0) - z.sub(0)))
-    except:
-        pass
+    print("Number of Newton iterations = %d" % (len(newton_data["gradients"])-1))
+    print("Number of cells in mesh = %d" % mesh.num_cells())
 
     # Save to VTK
     os.makedirs(stem, exist_ok=True)
