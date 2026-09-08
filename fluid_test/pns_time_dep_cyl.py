@@ -199,7 +199,7 @@ class PStokesTimeBase(NewtonMethod):
             )
 
     def apply_bcs(self):
-        print("Applying boundary conditions to the current state")
+        print("\tApplying boundary conditions to the current state")
         for bc_i in (self.bc if isinstance(self.bc, list) else [self.bc]):
             bc_i.apply(self.z)
 
@@ -330,7 +330,7 @@ if __name__ == "__main__":
 
     import argparse
     parser = argparse.ArgumentParser(description="p-Stokes time-dependent cylinder flow")
-    parser.add_argument("--method", choices=method_list + ["firedrake"], default="firedrake",
+    parser.add_argument("--method", choices=method_list, default="PStokes",
                         help="firedrake = raw Firedrake solve(); others use the Newton class")
     parser.add_argument("--p",         type=float, default=1.25)
     parser.add_argument("--vmean",     type=float, default=1.0)
@@ -340,12 +340,12 @@ if __name__ == "__main__":
     parser.add_argument("--nsave",     type=int,   default=250,
                         help="number of time steps written to VTK and HDF5 (evenly spaced)")
     parser.add_argument("--nu",        type=float, default=1e-3)
-    parser.add_argument("--delta-min", type=float, default=1e-10, dest="delta_min")
+    parser.add_argument("--delta-min", type=float, default=1e-12, dest="delta_min")
     parser.add_argument("--cip",       type=float, default=1.0)
     parser.add_argument("--nitsche1",  type=float, default=1e7)
     parser.add_argument("--nitsche2",  type=float, default=1e7)
     parser.add_argument('--stokes', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--nitsche', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--nitsche', action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     # ------------------------------------------------------------------ mesh
@@ -363,13 +363,6 @@ if __name__ == "__main__":
     x, y = SpatialCoordinate(mesh)
     H = mesh.coordinates.dat.data[:, 1].max() - mesh.coordinates.dat.data[:, 1].min()
     omega     = conditional(le(t, 1), 0.5 * (1 - cos(pi * t)), 1.0)
-
-    # expp = (args.p/(args.p - 1))
-    # u_in      = omega * args.vmean * (
-    #     (0.5 * H)**expp
-    #     - (abs(0.5 * H - y))**expp
-    #     )/ (0.5 * H)**expp
-    
     u_in      = omega * args.vmean * (
         (0.5 * H)**2
         - (abs(0.5 * H - y))**2
@@ -412,114 +405,56 @@ if __name__ == "__main__":
     outfile = VTKFile(f"{stem}/velocity_pressure.pvd")
     h5name  = f"{stem}/velocity_pressure.h5"
 
-    # ================================================================
-    # METHOD A: raw Firedrake solve()   (--method firedrake)
-    # ================================================================
-    if args.method == "firedrake":
+    # Set up the solver and solve
+    print(f"Using Newton class {args.method} with p = {args.p}, dt = {float(dt):.3e}, T = {args.T}, ntsteps = {args.ntsteps}")
 
-        z    = Function(Z)
+    solver = method_map[args.method](
+        mesh, Z, args, Constant((0, 0)), dt, bc = bcs,
+        g_D=g_D, ds_D=ds_D, ds_N =ds_N, dS_int=dS,
+    )
 
-        t.assign(dt)
-        z.sub(0).interpolate(as_vector([u_in, 0]))
-        t.assign(0)
-        
-        zold = Function(Z)
-        F    = pstokes_residual(z, zold, Constant((0, 0)), args, dt, dx,
-                                g_D=g_D, ds_D=ds_D, ds_N=ds_N, dS_int=dS)
+    # t.assign(dt)
+    # solver.z.sub(0).interpolate(as_vector([u_in, 0]))
+    # t.assign(0)       
 
-        # use NonlinearVariationalSolver so we can read the SNES iteration count
-        solver_params["snes_monitor"] = None  # print to console
-        problem  = NonlinearVariationalProblem(F, z, bcs=bcs)
-        nlsolver = NonlinearVariationalSolver(problem, solver_parameters=solver_params)
+    u_out = solver.z.sub(0)
+    p_out = solver.z.sub(1)
+    u_out.rename("velocity")
+    p_out.rename("pressure")
 
-        u_out, p_out = z.sub(0), z.sub(1)
-        u_out.rename("velocity")
-        p_out.rename("pressure")
+    newton_iters = []
+    with CheckpointFile(h5name, "w") as h5file:
+        h5file.save_mesh(mesh)
+        save_idx = 0
+        for tstep in range(args.ntsteps):
+            print("Updating time")
+            t.assign(float(t) + float(dt))
+            u_bc_in.interpolate(as_vector([u_in, 0]))            
 
-        newton_iters = []
-        with CheckpointFile(h5name, "w") as h5file:
-            h5file.save_mesh(mesh)
-            save_idx = 0
-            for tstep in range(args.ntsteps):
-                t.assign(float(t) + float(dt))
-                u_bc_in.interpolate(as_vector([u_in, 0]))
+            print(f"[{args.method}] step {tstep+1}/{args.ntsteps}, t = {float(t):.3f}")
+            newton_success, data = solver.step(return_data=True)
+            newton_iters.append(data["iterations"] if data is not None else 0)
 
-                print(f"[firedrake] step {tstep+1}/{args.ntsteps}, t = {float(t):.3f}")
-                nlsolver.solve()
-                newton_iters.append(nlsolver.snes.getIterationNumber())
-
-                u_bc_diff = (
-                    assemble(inner(u_out - u_bc_in, u_out - u_bc_in) * ds(1))
-                               / u_bc_in.dat.data.max()**2
-                    + assemble(inner(u_out, u_out) * ds((3, 4, 5)))
-                )
-                print(f"  Newton iters          = {newton_iters[-1]}")
-                print(f"  L2 error on vel BC    = {u_bc_diff:.3e}")
-                print(f"  velocity L2 norm      = {norm(u_out):.3e}")
-
-                if (tstep + 1) % save_every == 0:
-                    outfile.write(u_out, p_out, time=float(t))
-                    h5file.save_function(u_out, name="velocity", idx=save_idx)
-                    h5file.save_function(p_out, name="pressure", idx=save_idx)
-                    save_idx += 1
-
-                zold.assign(z)
-
-        np.save(f"{stem}/newton_iters.npy", np.array(newton_iters))
-        print(f"Saved {len(newton_iters)} iteration counts to {stem}/newton_iters.npy")
-
-    # ================================================================
-    # METHOD B: Newton class   (--method PStokes | PStokesLifted)
-    # ================================================================
-    else:
-
-        solver = method_map[args.method](
-            mesh, Z, args, Constant((0, 0)), dt, bc = bcs,
-            g_D=g_D, ds_D=ds_D, ds_N =ds_N, dS_int=dS,
-        )
-
-        # t.assign(dt)
-        # solver.z.sub(0).interpolate(as_vector([u_in, 0]))
-        # t.assign(0)       
-
-        u_out = solver.z.sub(0)
-        p_out = solver.z.sub(1)
-        u_out.rename("velocity")
-        p_out.rename("pressure")
-
-        newton_iters = []
-        with CheckpointFile(h5name, "w") as h5file:
-            h5file.save_mesh(mesh)
-            save_idx = 0
-            for tstep in range(args.ntsteps):
-                print("Updating time")
-                t.assign(float(t) + float(dt))
-                u_bc_in.interpolate(as_vector([u_in, 0]))            
-
-                print(f"[{args.method}] step {tstep+1}/{args.ntsteps}, t = {float(t):.3f}")
-                newton_success, data = solver.step(return_data=True)
-                newton_iters.append(data["iterations"] if data is not None else 0)
-
-                u_bc_diff = (
-                    assemble(inner(u_out - u_bc_in, u_out - u_bc_in) * ds(1))
-                               / u_bc_in.dat.data.max()**2
-                    + assemble(inner(u_out, u_out) * ds((3, 4, 5)))
-                )
-                
-                print(f"  Newton iters          = {newton_iters[-1]}")
-                print(f"  L2 error on vel BC    = {u_bc_diff:.3e}")
-                print(f"  velocity L2 norm      = {norm(u_out):.3e}")
-
-                if (tstep + 1) % save_every == 0:
-                    outfile.write(u_out, p_out, time=float(t))
-                    h5file.save_function(u_out, name="velocity", idx=save_idx)
-                    h5file.save_function(p_out, name="pressure", idx=save_idx)
-                    save_idx += 1
+            u_bc_diff = (
+                assemble(inner(u_out - u_bc_in, u_out - u_bc_in) * ds(1))
+                            / u_bc_in.dat.data.max()**2
+                + assemble(inner(u_out, u_out) * ds((3, 4, 5)))
+            )
             
-                if not newton_success:
-                    print("Newton failed to converge at this time step, aborting time-stepping loop")
-                    break                    
+            print(f"  Newton iters          = {newton_iters[-1]}")
+            print(f"  L2 error on vel BC    = {u_bc_diff:.3e}")
+            print(f"  velocity L2 norm      = {norm(u_out):.3e}")
 
-        np.save(f"{stem}/newton_iters.npy", np.array(newton_iters))
-        print(f"Saved {len(newton_iters)} iteration counts to {stem}/newton_iters.npy")
+            if (tstep + 1) % save_every == 0:
+                outfile.write(u_out, p_out, time=float(t))
+                h5file.save_function(u_out, name="velocity", idx=save_idx)
+                h5file.save_function(p_out, name="pressure", idx=save_idx)
+                save_idx += 1
+        
+            if not newton_success:
+                print("Newton failed to converge at this time step, aborting time-stepping loop")
+                break                    
+
+    np.save(f"{stem}/newton_iters.npy", np.array(newton_iters))
+    print(f"Saved {len(newton_iters)} iteration counts to {stem}/newton_iters.npy")
 

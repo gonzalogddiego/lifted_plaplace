@@ -1,11 +1,14 @@
 # lifted_plaplace
 Implementation of the standard and lifted Newton methods, and the scripts used to
-reproduce the results in `pLaplace.tex` (Margenberg & Mehlmann).
+reproduce the results in the paper ''Transform before linearizing: robust Newton methods for singular $p$-Laplace and p-Stokes equations''
 
 ## Library
 - `newtons_method.py` — base Newton solver.
 - `plaplace.py` — standard/lifted/Picard solvers for the $p$-Laplace equation.
 - `utils.py`, `plot_utils.py` — shared solver/plotting settings.
+- `plaplace_test/` — scripts for computing $p$-Laplace equation.
+- `fluid_test/` — scripts for computing $p$-Stokes/NS equations.
+- `fd_test/` — scripts for computing one-dimensional finite difference example.
 
 ## Generating the plots
 
